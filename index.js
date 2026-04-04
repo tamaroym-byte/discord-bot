@@ -12,6 +12,11 @@ const {
 
 const SAVE_FILE = path.join(__dirname, "rooms.json");
 
+// 初回起動で rooms.json を自動生成
+if (!fs.existsSync(SAVE_FILE)) {
+  fs.writeFileSync(SAVE_FILE, "[]");
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -28,25 +33,32 @@ const rooms = new Map();
 // 永続化
 // ==========================
 function saveRooms() {
-  const data = [...rooms.entries()].map(([id, room]) => [id, {
-    ...room,
-    watchers: [...room.watchers]
-  }]);
+  try {
+    const data = [...rooms.entries()].map(([id, room]) => [
+      id,
+      {
+        ...room,
+        watchers: [...room.watchers]
+      }
+    ]);
 
-  fs.writeFileSync(SAVE_FILE, JSON.stringify(data, null, 2));
+    fs.writeFileSync(SAVE_FILE, JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error("rooms.json保存失敗", e);
+  }
 }
 
 function loadRooms() {
-  if (!fs.existsSync(SAVE_FILE)) return;
-
   try {
     const raw = JSON.parse(fs.readFileSync(SAVE_FILE, "utf8"));
+
     for (const [id, room] of raw) {
       rooms.set(id, {
         ...room,
         watchers: new Set(room.watchers || [])
       });
     }
+
     console.log(`復元済みルーム数: ${rooms.size}`);
   } catch (e) {
     console.error("rooms.json復元失敗", e);
@@ -96,6 +108,7 @@ async function handleJoin(state) {
     if (!max) return;
   }
 
+  // 新規募集作成
   if (!rooms.has(vc.id)) {
     const channel = getRecruitChannel(vc.guild, vc);
     if (!channel) return;
@@ -149,7 +162,9 @@ async function handleLeave(state) {
   room.count++;
   if (room.count > room.max) room.count = room.max;
 
-  const remain = vc.members.filter(m => !room.watchers.has(m.id)).size;
+  const remain = vc.members.filter(
+    m => !room.watchers.has(m.id)
+  ).size;
 
   if (remain === 0) {
     await updateMessage(vc, room, true);
@@ -209,6 +224,7 @@ async function showSelection(vc, member, room) {
         room.count--;
         if (room.count < 0) room.count = 0;
         await updateMessage(vc, room);
+
         await interaction.update({
           content: "参加しました",
           components: []
@@ -216,6 +232,7 @@ async function showSelection(vc, member, room) {
       } else {
         room.watchers.add(member.id);
         await addWatchName(member);
+
         await interaction.update({
           content: "観戦に設定しました",
           components: []
@@ -237,6 +254,7 @@ async function showSelection(vc, member, room) {
 
       room.waiting = null;
       saveRooms();
+
       await msg.delete().catch(() => {});
     } catch (e) {
       console.error("collector end error", e);
@@ -245,21 +263,25 @@ async function showSelection(vc, member, room) {
 }
 
 // ==========================
-// メッセージ更新
+// 募集メッセージ更新
 // ==========================
 async function updateMessage(vc, room, close = false) {
   const channel = getRecruitChannel(vc.guild, vc);
   if (!channel) return;
 
-  try {
-    const msg = await channel.messages.fetch(room.messageId);
-    const text = close || room.count <= 0
+  const text =
+    close || room.count <= 0
       ? `${vc.name} 募集〆`
       : `${vc.name} @${room.count}`;
 
+  try {
+    const msg = await channel.messages.fetch(room.messageId);
     await msg.edit({ content: text });
-  } catch (e) {
-    console.error("message update error", e);
+  } catch {
+    // メッセージ消えてたら再作成
+    const newMsg = await channel.send({ content: text });
+    room.messageId = newMsg.id;
+    saveRooms();
   }
 }
 
@@ -311,7 +333,9 @@ async function addWatchName(member) {
 
 async function removeWatchName(member) {
   if (!member.manageable) return;
-  await member.setNickname(member.displayName.replace("（観戦）", ""));
+  await member.setNickname(
+    member.displayName.replace("（観戦）", "")
+  );
 }
 
 // ==========================
