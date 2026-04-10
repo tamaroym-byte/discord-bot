@@ -62,7 +62,7 @@ async function handleJoin(state) {
         ownerId: member.id,
         waiting: null
       });
-      saveRooms();
+      function saveRooms(rooms)
       return;
     } finally {
       creatingRooms.delete(vc.id);
@@ -86,7 +86,7 @@ async function handleLeave(state) {
   // 観戦者退出
   if (room.watchers.delete(member.id)) {
     await normalizeNickname(member, room);
-    saveRooms();
+    function saveRooms(rooms);
     return;
   }
 
@@ -95,7 +95,7 @@ async function handleLeave(state) {
     room.waitingUsers.delete(member.id);
     await reorderWaiting(vc, room);
     await normalizeNickname(member, room);
-    saveRooms();
+    function saveRooms(rooms);
     return;
   }
 
@@ -123,12 +123,12 @@ async function handleLeave(state) {
   if (remain === 0) {
     await updateMessage(vc, room, true);
     rooms.delete(vc.id);
-    saveRooms();
+    function saveRooms(rooms);
     return;
   }
 
   await updateMessage(vc, room);
-  saveRooms();
+  function saveRooms(rooms);
 }
 
 async function askOtherGameMax(vc, member) {
@@ -216,7 +216,7 @@ async function showSelection(vc, member, room) {
     }
 
     room.waiting = null;
-    saveRooms();
+    function saveRooms(rooms);
   });
 
   collector.on("end", async c => {
@@ -252,7 +252,7 @@ async function showSelection(vc, member, room) {
     }
 
     room.waiting = null;
-    saveRooms();
+    saveRooms(rooms);
     await msg.delete().catch(() => {});
   });
 }
@@ -384,7 +384,7 @@ async function selfHealRooms() {
     }
   }
 
-  saveRooms();
+  saveRooms(rooms);
 }
 
 async function restoreNicknames() {
