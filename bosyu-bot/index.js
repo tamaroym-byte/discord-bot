@@ -11,7 +11,7 @@ const {
   ChannelType
 } = require("discord.js");
 
-const SAVE_FILE = path.join(__dirname, "rooms.json");
+const SAVE_FILE = "/data/rooms.json";
 if (!fs.existsSync(SAVE_FILE)) fs.writeFileSync(SAVE_FILE, "[]");
 
 const client = new Client({
