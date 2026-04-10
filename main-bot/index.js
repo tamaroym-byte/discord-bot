@@ -1,5 +1,5 @@
 require("dotenv").config();
-const { saveRooms, loadRooms } = require("./shared/roomStore");
+const { saveRooms, loadRooms } = require("../shared/roomStore");
 
 const {
   ActionRowBuilder,
@@ -9,7 +9,7 @@ const {
   ChannelType
 } = require("discord.js");
 
-const { createClient } = require("./shared/client");
+const { createClient } = require("../shared/client");
 
 const client = createClient();
 
