@@ -27,18 +27,24 @@ function saveRooms(rooms) {
 function loadRooms() {
   ensureFile();
 
-  const raw = JSON.parse(fs.readFileSync(SAVE_FILE, "utf8"));
-  const rooms = new Map();
+  try {
+    const raw = JSON.parse(fs.readFileSync(SAVE_FILE, "utf8"));
+    const rooms = new Map();
 
-  for (const [id, room] of raw) {
-    rooms.set(id, {
-      ...room,
-      watchers: new Set(room.watchers || []),
-      waitingUsers: new Map(room.waitingUsers || [])
-    });
+    for (const [id, room] of raw) {
+      rooms.set(id, {
+        ...room,
+        watchers: new Set(room.watchers || []),
+        waitingUsers: new Map(room.waitingUsers || [])
+      });
+    }
+
+    return rooms;
+  } catch (err) {
+    console.error("rooms.json 読み込み失敗:", err);
+    fs.writeFileSync(SAVE_FILE, "[]");
+    return new Map();
   }
-
-  return rooms;
 }
 
 module.exports = { saveRooms, loadRooms };
