@@ -1,6 +1,9 @@
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
+
+const { saveRooms, loadRooms } = require("../shared/roomStore");
+
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -11,36 +14,10 @@ const {
 
 const { createClient } = require("../shared/client");
 
-const SAVE_FILE = path.join(__dirname, "rooms.json");
-if (!fs.existsSync(SAVE_FILE)) fs.writeFileSync(SAVE_FILE, "[]");
-
 const client = createClient();
 
-const rooms = new Map();
+const rooms = loadRooms();
 const creatingRooms = new Set();
-
-function saveRooms() {
-  const data = [...rooms.entries()].map(([id, room]) => [
-    id,
-    {
-      ...room,
-      watchers: [...room.watchers],
-      waitingUsers: [...room.waitingUsers.entries()]
-    }
-  ]);
-  fs.writeFileSync(SAVE_FILE, JSON.stringify(data, null, 2));
-}
-
-function loadRooms() {
-  const raw = JSON.parse(fs.readFileSync(SAVE_FILE, "utf8"));
-  for (const [id, room] of raw) {
-    rooms.set(id, {
-      ...room,
-      watchers: new Set(room.watchers || []),
-      waitingUsers: new Map(room.waitingUsers || [])
-    });
-  }
-}
 
 client.on("voiceStateUpdate", async (oldState, newState) => {
   try {
@@ -430,7 +407,6 @@ async function restoreNicknames() {
 }
 
 client.once("clientReady", async () => {
-  loadRooms();
   await selfHealRooms();
   await restoreNicknames();
   console.log(`ログイン成功: ${client.user.tag}`);
