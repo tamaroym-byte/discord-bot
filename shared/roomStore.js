@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const SAVE_FILE = path.join(__dirname, "..", "main-bot", "rooms.json");
+const SAVE_FILE = path.join(process.cwd(), "rooms.json");
 
 function ensureFile() {
   if (!fs.existsSync(SAVE_FILE)) {
