@@ -2,8 +2,6 @@ require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const {
-  Client,
-  GatewayIntentBits,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -11,16 +9,12 @@ const {
   ChannelType
 } = require("discord.js");
 
+const { createClient } = require("../shared/client");
+
 const SAVE_FILE = path.join(__dirname, "rooms.json");
 if (!fs.existsSync(SAVE_FILE)) fs.writeFileSync(SAVE_FILE, "[]");
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMembers
-  ]
-});
+const client = createClient();
 
 const rooms = new Map();
 const creatingRooms = new Set();
