@@ -37,7 +37,8 @@ client.on(Events.InteractionCreate, async interaction => {
   if (interaction.commandName !== "kuji") return;
 
   try {
-    const name = interaction.member?.displayName ?? interaction.user.username;
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const name = member.displayName;
     const result = getDailyFortune(user.id);
 
     const message = [
