@@ -204,13 +204,13 @@ async function showSelection(vc, member, room) {
   if (!channel) return;
 
   const msg = await channel.send({
-    content: `${member} 参加 or 観戦？（60秒）`,
+    content: `${member} 参加 or 観戦？（30秒）`,
     components: [buildButtons()]
   });
 
   const collector = msg.createMessageComponentCollector({
     filter: i => i.user.id === member.id,
-    time: 60000,
+    time: 30000,
     max: 1
   });
 
@@ -220,16 +220,28 @@ async function showSelection(vc, member, room) {
         const next = room.waitingUsers.size + 1;
         room.waitingUsers.set(member.id, next);
         await normalizeNickname(member, room);
-        await interaction.update({ content: `待機${next}`, components: [] });
+
+        await interaction.update({
+          content: `待機${next}`,
+          components: []
+        });
       } else {
         room.count--;
         await updateMessage(vc, room);
-        await interaction.update({ content: "参加しました", components: [] });
+
+        await interaction.update({
+          content: "参加しました",
+          components: []
+        });
       }
     } else {
       room.watchers.add(member.id);
       await normalizeNickname(member, room);
-      await interaction.update({ content: "観戦に設定しました", components: [] });
+
+      await interaction.update({
+        content: "観戦に設定しました",
+        components: []
+      });
     }
 
     room.waiting = null;
@@ -238,9 +250,36 @@ async function showSelection(vc, member, room) {
 
   collector.on("end", async c => {
     if (c.size === 0 && member.voice.channelId === vc.id) {
-      room.watchers.add(member.id);
-      await normalizeNickname(member, room);
+
+      if (room.count <= 0) {
+        // 満員 → 待機
+        const next = room.waitingUsers.size + 1;
+        room.waitingUsers.set(member.id, next);
+        await normalizeNickname(member, room);
+
+        //　簡略メッセージ + メンション抑制
+        if (channel) {
+          await channel.send({
+            content: `${member} → 待機${next}`,
+            allowedMentions: { parse: [] }
+          });
+        }
+
+      } else {
+        // 空きあり → 自動参加
+        room.count--;
+        await updateMessage(vc, room);
+
+        // 簡略メッセージ + メンション抑制
+        if (channel) {
+          await channel.send({
+            content: `${member} → 自動参加`,
+            allowedMentions: { parse: [] }
+          });
+        }
+      }
     }
+
     room.waiting = null;
     saveRooms();
     await msg.delete().catch(() => {});
@@ -282,7 +321,7 @@ async function updateMessage(vc, room, close = false) {
   const channel = getRecruitChannel(vc.guild, vc);
   if (!channel) return;
 
-  const text = close || room.count <= 0 ? `${vc.name} 募集〆` : `${vc.name} @${room.count}`;
+  const text = close || room.count <= 0 ? `@everyone ${vc.name} 募集〆` : `@everyone ${vc.name} @${room.count}`;
 
   try {
     const msg = await channel.messages.fetch(room.messageId);
