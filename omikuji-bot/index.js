@@ -126,7 +126,7 @@ client.on(Events.InteractionCreate, async i => {
 
     if (!i.isButton()) return;
 
-    const name = i.member?.displayName || i.user.username;
+    const name = i.member?.displayName ?? i.user.username;
 
     // ===== 初回 =====
     if (i.customId === "start") {
