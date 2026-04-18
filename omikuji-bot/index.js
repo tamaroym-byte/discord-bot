@@ -126,8 +126,14 @@ client.on(Events.InteractionCreate, async i => {
 
     if (!i.isButton()) return;
 
-    const name = i.member?.displayName ?? i.user.username;
+    let name;
 
+　　if (i.inGuild()) {
+　　  const member = await i.guild.members.fetch(i.user.id);
+　　  name = member.displayName;
+　　} else {
+　　  name = i.user.username;
+　　}
     // ===== 初回 =====
     if (i.customId === "start") {
       await i.deferUpdate();
