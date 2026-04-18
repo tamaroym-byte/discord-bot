@@ -15,6 +15,15 @@ const {
 
 const { getDailyFortune } = require("./fortunes");
 
+// ===== ログ関数 =====
+function log(...args) {
+  console.log("[LOG]", ...args);
+}
+function error(...args) {
+  console.error("[ERROR]", ...args);
+}
+
+// ===== クライアント =====
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
@@ -22,20 +31,34 @@ const client = new Client({
 // ===== コマンド =====
 const command = new SlashCommandBuilder()
   .setName("kuji")
-  .setDescription("おみくじを引きます（1日1回＋引き直し1回）");
+  .setDescription("おみくじ（デバッグ版）");
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
-// ===== 引き直し管理 =====
+// ===== 保存 =====
 const REDRAW_FILE = "./redraws.json";
 if (!fs.existsSync(REDRAW_FILE)) fs.writeFileSync(REDRAW_FILE, "{}");
 
 function loadRedraws() {
-  return JSON.parse(fs.readFileSync(REDRAW_FILE, "utf8"));
+  try {
+    const data = JSON.parse(fs.readFileSync(REDRAW_FILE, "utf8"));
+    log("redraws loaded", data);
+    return data;
+  } catch (e) {
+    error("redraw load failed", e);
+    return {};
+  }
 }
+
 function saveRedraws(data) {
-  fs.writeFileSync(REDRAW_FILE, JSON.stringify(data, null, 2));
+  try {
+    fs.writeFileSync(REDRAW_FILE, JSON.stringify(data, null, 2));
+    log("redraws saved");
+  } catch (e) {
+    error("redraw save failed", e);
+  }
 }
+
 function getTodayKey(userId) {
   const today = new Date().toISOString().slice(0, 10);
   return `${userId}_${today}`;
@@ -62,109 +85,134 @@ function buildRedrawButton(disabled = false) {
 }
 
 // ===== Embed =====
-function getLuckColor(luck) {
-  switch (luck) {
-    case "大吉": return 0xffd700;
-    case "吉": return 0x00cc66;
-    case "中吉": return 0x3399ff;
-    case "小吉": return 0x66ccff;
-    case "末吉": return 0xcccccc;
-    case "凶": return 0xff6600;
-    case "大凶": return 0xff0000;
-    default: return 0xffffff;
-  }
-}
-
 function buildEmbed(name, result) {
-  const embed = new EmbedBuilder()
-    .setColor(getLuckColor(result.luck))
+  log("buildEmbed", result);
+
+  return new EmbedBuilder()
     .setTitle("🎍 おみくじ 🎍")
-    .setDescription(`「${name}」さんの本日の運勢`)
+    .setDescription(`「${name}」さんの運勢`)
     .addFields(
-      { name: "✨ 運勢 ✨", value: `**${result.luck}**` },
-      { name: "🧭 総合", value: result.luckMessage },
-      { name: "🙏 願望", value: result.wish, inline: true },
-      { name: "👤 待ち人", value: result.person, inline: true },
-      { name: "🔍 失せ物", value: result.lost, inline: true },
-      { name: "🗺️ 旅行", value: result.travel, inline: true }
+      { name: "運勢", value: result.luck },
+      { name: "総合", value: result.luckMessage }
     )
-    .setFooter({ text: "本日の運勢（毎日更新）" })
     .setTimestamp();
-
-  if (result.luck === "大吉") {
-    embed.setTitle("🌟🎍 大吉 🎍🌟");
-  }
-
-  return embed;
 }
 
 // ===== コマンド登録 =====
 async function registerCommands() {
+  log("registering command...");
   await rest.put(
     Routes.applicationCommands(process.env.CLIENT_ID),
     { body: [command.toJSON()] }
   );
-  console.log("/kuji 登録完了");
+  log("command registered");
 }
 
-// ===== イベント =====
+// ===== 起動 =====
 client.once(Events.ClientReady, async () => {
-  console.log(`${client.user.tag} 起動完了`);
+  log(`READY: ${client.user.tag}`);
   await registerCommands();
 });
 
+// ===== Interaction =====
 client.on(Events.InteractionCreate, async interaction => {
+  log("interaction received", interaction.type);
 
-  // ===== Slash =====
-  if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === "kuji") {
-      return interaction.reply({
-        content: "🎍 おみくじを引いてください",
-        components: [buildStartButton()]
-      });
-    }
-  }
+  try {
+    // ===== Slash =====
+    if (interaction.isChatInputCommand()) {
+      log("slash command", interaction.commandName);
 
-  // ===== ボタン =====
-  if (!interaction.isButton()) return;
-
-  const member = await interaction.guild.members.fetch(interaction.user.id);
-  const name = member.displayName;
-
-  // --- 初回 ---
-  if (interaction.customId === "kuji_start") {
-    const result = getDailyFortune(interaction.user.id);
-
-    return interaction.update({
-      content: "🎍 結果はこちら",
-      embeds: [buildEmbed(name, result)],
-      components: [buildRedrawButton(false)]
-    });
-  }
-
-  // --- 引き直し ---
-  if (interaction.customId === "kuji_redraw") {
-    const redraws = loadRedraws();
-    const key = getTodayKey(interaction.user.id);
-
-    if (redraws[key]) {
-      return interaction.reply({
-        content: "⛔ 今日はもう引き直しできません",
-        ephemeral: true
-      });
+      if (interaction.commandName === "kuji") {
+        await interaction.reply({
+          content: "ボタンを押してください",
+          components: [buildStartButton()]
+        });
+        log("slash reply sent");
+      }
     }
 
-    const result = getDailyFortune(interaction.user.id, true);
+    // ===== ボタン =====
+    if (!interaction.isButton()) return;
 
-    redraws[key] = true;
-    saveRedraws(redraws);
+    log("button pressed", interaction.customId);
 
-    return interaction.update({
-      content: "🔁 引き直しました（本日1回のみ）",
-      embeds: [buildEmbed(name, result)],
-      components: [buildRedrawButton(true)]
-    });
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const name = member.displayName;
+
+    // --- START ---
+    if (interaction.customId === "kuji_start") {
+      log("start clicked");
+
+      await interaction.deferUpdate(); // 安定化
+
+      const result = getDailyFortune(interaction.user.id);
+
+      await interaction.editReply({
+        content: "結果",
+        embeds: [buildEmbed(name, result)],
+        components: [buildRedrawButton(false)]
+      });
+
+      log("start done");
+    }
+
+    // --- REDRAW ---
+    if (interaction.customId === "kuji_redraw") {
+      log("redraw clicked");
+
+      await interaction.deferUpdate();
+
+      const redraws = loadRedraws();
+      const key = getTodayKey(interaction.user.id);
+
+      if (redraws[key]) {
+        log("already used redraw");
+
+        return interaction.followUp({
+          content: "もう引き直せません",
+          ephemeral: true
+        });
+      }
+
+      const result = getDailyFortune(interaction.user.id, true);
+
+      redraws[key] = true;
+      saveRedraws(redraws);
+
+      await interaction.editReply({
+        content: "引き直しました",
+        embeds: [buildEmbed(name, result)],
+        components: [buildRedrawButton(true)]
+      });
+
+      log("redraw done");
+    }
+
+  } catch (err) {
+    error("interaction error", err);
+
+    try {
+      if (!interaction.replied) {
+        await interaction.reply({
+          content: "エラー発生（ログ確認）",
+          ephemeral: true
+        });
+      }
+    } catch (e) {
+      error("reply fail", e);
+    }
   }
 });
 
+// ===== クラッシュ防止 =====
+process.on("unhandledRejection", err => {
+  error("UNHANDLED REJECTION", err);
+});
+
+process.on("uncaughtException", err => {
+  error("UNCAUGHT EXCEPTION", err);
+});
+
+// ===== 起動 =====
 client.login(process.env.DISCORD_TOKEN);
