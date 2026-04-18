@@ -1,6 +1,5 @@
 require("dotenv").config();
 const fs = require("fs");
-const path = require("path");
 const {
   Client,
   GatewayIntentBits,
@@ -24,14 +23,36 @@ const client = new Client({
 
 const rooms = new Map();
 const creatingRooms = new Set();
+const roomLocks = new Map();
 
+// ===== BOT判定 =====
+const BOT_ROLE_ID = "YOUR_BOT_ROLE_ID";
+
+function isBotMember(member) {
+  return member.user.bot || member.roles.cache.has(BOT_ROLE_ID);
+}
+
+// ===== ロック =====
+async function withRoomLock(id, fn) {
+  while (roomLocks.get(id)) {
+    await new Promise(r => setTimeout(r, 30));
+  }
+  roomLocks.set(id, true);
+  try {
+    return await fn();
+  } finally {
+    roomLocks.delete(id);
+  }
+}
+
+// ===== 保存 =====
 function saveRooms() {
-  const data = [...rooms.entries()].map(([id, room]) => [
+  const data = [...rooms.entries()].map(([id, r]) => [
     id,
     {
-      ...room,
-      watchers: [...room.watchers],
-      waitingUsers: [...room.waitingUsers.entries()]
+      ...r,
+      watchers: [...r.watchers],
+      waitingQueue: r.waitingQueue
     }
   ]);
   fs.writeFileSync(SAVE_FILE, JSON.stringify(data, null, 2));
@@ -39,17 +60,34 @@ function saveRooms() {
 
 function loadRooms() {
   const raw = JSON.parse(fs.readFileSync(SAVE_FILE, "utf8"));
-  for (const [id, room] of raw) {
+  for (const [id, r] of raw) {
     rooms.set(id, {
-      ...room,
-      watchers: new Set(room.watchers || []),
-      waitingUsers: new Map(room.waitingUsers || [])
+      ...r,
+      watchers: new Set(r.watchers || []),
+      waitingQueue: r.waitingQueue || []
     });
   }
 }
 
+// ===== 人数計算（最重要） =====
+function getActiveCount(vc, room) {
+  return vc.members.filter(
+    m =>
+      !room.watchers.has(m.id) &&
+      !room.waitingQueue.includes(m.id) &&
+      !isBotMember(m)
+  ).size;
+}
+
+function getFreeSlots(vc, room) {
+  return room.max - getActiveCount(vc, room);
+}
+
+// ===== VCイベント =====
 client.on("voiceStateUpdate", async (oldState, newState) => {
   try {
+    if (isBotMember(newState.member || oldState.member)) return;
+
     if (oldState.channel && newState.channel && oldState.channel.id !== newState.channel.id) {
       await handleLeave(oldState);
       await handleJoin(newState);
@@ -62,9 +100,11 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
   }
 });
 
+// ===== JOIN =====
 async function handleJoin(state) {
   const vc = state.channel;
   const member = state.member;
+
   if (!/^部屋[1-4]$/.test(vc.name)) return;
   if (creatingRooms.has(vc.id)) return;
 
@@ -73,10 +113,6 @@ async function handleJoin(state) {
   if (!rooms.has(vc.id)) {
     creatingRooms.add(vc.id);
     try {
-      if (vc.parent?.name === "他ゲーム") {
-        max = await askOtherGameMax(vc, member);
-      }
-
       const channel = getRecruitChannel(vc.guild, vc);
       if (!channel) return;
 
@@ -84,13 +120,12 @@ async function handleJoin(state) {
 
       rooms.set(vc.id, {
         max,
-        count: max,
         messageId: msg.id,
         watchers: new Set(),
-        waitingUsers: new Map(),
-        ownerId: member.id,
-        waiting: null
+        waitingQueue: [],
+        ownerId: member.id
       });
+
       saveRooms();
       return;
     } finally {
@@ -99,112 +134,43 @@ async function handleJoin(state) {
   }
 
   const room = rooms.get(vc.id);
-  if (!room || member.id === room.ownerId || room.waiting) return;
-
-  room.waiting = member.id;
-  saveRooms();
   await showSelection(vc, member, room);
 }
 
+// ===== LEAVE =====
 async function handleLeave(state) {
   const vc = state.channel;
   const member = state.member;
   const room = rooms.get(vc.id);
   if (!room) return;
 
-  // 観戦者退出
-  if (room.watchers.delete(member.id)) {
-    await normalizeNickname(member, room);
+  await withRoomLock(vc.id, async () => {
+    room.watchers.delete(member.id);
+
+    const index = room.waitingQueue.indexOf(member.id);
+    if (index !== -1) {
+      room.waitingQueue.splice(index, 1);
+    }
+
+    // 昇格処理
+    while (getFreeSlots(vc, room) > 0 && room.waitingQueue.length > 0) {
+      const nextId = room.waitingQueue.shift();
+      const nextMember = await vc.guild.members.fetch(nextId).catch(() => null);
+      if (nextMember) await normalizeNickname(nextMember, room);
+    }
+
+    await updateMessage(vc, room);
     saveRooms();
-    return;
-  }
-
-  // 待機者退出
-  if (room.waitingUsers.has(member.id)) {
-    room.waitingUsers.delete(member.id);
-    await reorderWaiting(vc, room);
-    await normalizeNickname(member, room);
-    saveRooms();
-    return;
-  }
-
-  // owner移譲
-  if (member.id === room.ownerId) {
-    const nextOwner = vc.members
-      .filter(m => m.id !== member.id && !room.watchers.has(m.id))
-      .first();
-    if (nextOwner) room.ownerId = nextOwner.id;
-  }
-
-  room.count = Math.min(room.count + 1, room.max);
-
-  // 待機者昇格
-  if (room.count > 0 && room.waitingUsers.size > 0) {
-    const promotedId = [...room.waitingUsers.keys()][0];
-    room.waitingUsers.delete(promotedId);
-    const promoted = await vc.guild.members.fetch(promotedId).catch(() => null);
-    if (promoted) await normalizeNickname(promoted, room);
-    room.count--;
-    await reorderWaiting(vc, room);
-  }
-
-  const remain = vc.members.filter(m => !room.watchers.has(m.id)).size;
-  if (remain === 0) {
-    await updateMessage(vc, room, true);
-    rooms.delete(vc.id);
-    saveRooms();
-    return;
-  }
-
-  await updateMessage(vc, room);
-  saveRooms();
-}
-
-async function askOtherGameMax(vc, member) {
-  const channel = getRecruitChannel(vc.guild, vc);
-  if (!channel) return 7;
-
-  const row = new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`max_${member.id}`)
-      .setPlaceholder("募集人数を選択")
-      .addOptions([
-        { label: "3人", value: "3" },
-        { label: "7人", value: "7" },
-        { label: "11人", value: "11" }
-      ])
-  );
-
-  const msg = await channel.send({
-    content: `${member} 募集人数を選択してください`,
-    components: [row]
-  });
-
-  return new Promise(resolve => {
-    const collector = msg.createMessageComponentCollector({
-      filter: i => i.user.id === member.id,
-      time: 30000,
-      max: 1
-    });
-
-    collector.on("collect", async i => {
-      const value = Number(i.values[0]);
-      await i.update({ content: `募集人数 ${value}人`, components: [] });
-      resolve(value);
-    });
-
-    collector.on("end", c => {
-      if (c.size === 0) resolve(7);
-    });
   });
 }
 
+// ===== 選択UI =====
 async function showSelection(vc, member, room) {
   const channel = getRecruitChannel(vc.guild, vc);
   if (!channel) return;
 
   const msg = await channel.send({
-    content: `${member} 参加 or 観戦？（30秒）`,
+    content: `${member} 参加 or 観戦？`,
     components: [buildButtons()]
   });
 
@@ -214,114 +180,78 @@ async function showSelection(vc, member, room) {
     max: 1
   });
 
-  collector.on("collect", async interaction => {
-    if (interaction.customId === "join") {
-      if (room.count <= 0) {
-        const next = room.waitingUsers.size + 1;
-        room.waitingUsers.set(member.id, next);
+  collector.on("collect", async i => {
+    await withRoomLock(vc.id, async () => {
+      if (i.customId === "join") {
+        const free = getFreeSlots(vc, room);
+
+        if (free <= 0) {
+          room.waitingQueue.push(member.id);
+          await normalizeNickname(member, room);
+
+          await i.update({ content: `待機${room.waitingQueue.length}`, components: [] });
+        } else {
+          await i.update({ content: "参加しました", components: [] });
+        }
+      } else {
+        room.watchers.add(member.id);
         await normalizeNickname(member, room);
 
-        await interaction.update({
-          content: `待機${next}`,
-          components: []
-        });
-      } else {
-        room.count--;
-        await updateMessage(vc, room);
-
-        await interaction.update({
-          content: "参加しました",
-          components: []
-        });
+        await i.update({ content: "観戦", components: [] });
       }
-    } else {
-      room.watchers.add(member.id);
-      await normalizeNickname(member, room);
 
-      await interaction.update({
-        content: "観戦に設定しました",
-        components: []
-      });
-    }
-
-    room.waiting = null;
-    saveRooms();
+      await updateMessage(vc, room);
+      saveRooms();
+    });
   });
 
   collector.on("end", async c => {
     if (c.size === 0 && member.voice.channelId === vc.id) {
+      await withRoomLock(vc.id, async () => {
+        const free = getFreeSlots(vc, room);
 
-      if (room.count <= 0) {
-        // 満員 → 待機
-        const next = room.waitingUsers.size + 1;
-        room.waitingUsers.set(member.id, next);
-        await normalizeNickname(member, room);
-
-        //　簡略メッセージ + メンション抑制
-        if (channel) {
-          await channel.send({
-            content: `${member} → 待機${next}`,
-            allowedMentions: { parse: [] }
-          });
+        if (free <= 0) {
+          room.waitingQueue.push(member.id);
+          await normalizeNickname(member, room);
         }
 
-      } else {
-        // 空きあり → 自動参加
-        room.count--;
         await updateMessage(vc, room);
-
-        // 簡略メッセージ + メンション抑制
-        if (channel) {
-          await channel.send({
-            content: `${member} → 自動参加`,
-            allowedMentions: { parse: [] }
-          });
-        }
-      }
+        saveRooms();
+      });
     }
-
-    room.waiting = null;
-    saveRooms();
     await msg.delete().catch(() => {});
   });
 }
 
-async function reorderWaiting(vc, room) {
-  let index = 1;
-  const newMap = new Map();
-
-  for (const id of room.waitingUsers.keys()) {
-    newMap.set(id, index);
-    const member = await vc.guild.members.fetch(id).catch(() => null);
-    if (member) await normalizeNickname(member, { ...room, waitingUsers: newMap });
-    index++;
-  }
-
-  room.waitingUsers = newMap;
-}
-
+// ===== ニックネーム =====
 async function normalizeNickname(member, room) {
+  if (isBotMember(member)) return;
   if (!member.manageable) return;
 
   let name = member.displayName
     .replace(/（観戦）/g, "")
-    .replace(/ 待機\d+/g, "")
-    .trim();
+    .replace(/ 待機\d+/g, "");
 
-  if (room.watchers?.has(member.id)) {
+  if (room.watchers.has(member.id)) {
     name += "（観戦）";
-  } else if (room.waitingUsers?.has(member.id)) {
-    name += ` 待機${room.waitingUsers.get(member.id)}`;
+  } else {
+    const idx = room.waitingQueue.indexOf(member.id);
+    if (idx !== -1) name += ` 待機${idx + 1}`;
   }
 
   await member.setNickname(name).catch(() => {});
 }
 
-async function updateMessage(vc, room, close = false) {
+// ===== メッセージ更新 =====
+async function updateMessage(vc, room) {
   const channel = getRecruitChannel(vc.guild, vc);
   if (!channel) return;
 
-  const text = close || room.count <= 0 ? `@everyone ${vc.name} 募集〆` : `@everyone ${vc.name} @${room.count}`;
+  const free = getFreeSlots(vc, room);
+  const text =
+    free <= 0
+      ? `@everyone ${vc.name} 募集〆`
+      : `@everyone ${vc.name} @${free}`;
 
   try {
     const msg = await channel.messages.fetch(room.messageId);
@@ -332,6 +262,7 @@ async function updateMessage(vc, room, close = false) {
   }
 }
 
+// ===== その他 =====
 function buildButtons() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("join").setLabel("参加").setStyle(ButtonStyle.Success),
@@ -351,94 +282,12 @@ function getRecruitChannel(guild, vc) {
   );
   if (!recruit) return null;
 
-  if (vc.parent?.name === "PHASMOPHOBIA") {
-    return guild.channels.cache.find(c => c.parentId === recruit.id && c.name === "調査員募集");
-  }
-  if (vc.parent?.name === "他ゲーム") {
-    return guild.channels.cache.find(c => c.parentId === recruit.id && c.name === "他ゲーム募集");
-  }
-  return null;
+  return guild.channels.cache.find(c => c.parentId === recruit.id);
 }
 
-async function selfHealRooms() {
-  for (const [vcId, room] of rooms.entries()) {
-    let foundVc = null;
-    let foundGuild = null;
-
-    for (const guild of client.guilds.cache.values()) {
-      const vc = guild.channels.cache.get(vcId);
-      if (vc) {
-        foundVc = vc;
-        foundGuild = guild;
-        break;
-      }
-    }
-
-    if (!foundVc || !foundGuild) {
-      rooms.delete(vcId);
-      continue;
-    }
-
-    // 実際にVC内にいない観戦者を掃除
-    for (const userId of [...room.watchers]) {
-      if (!foundVc.members.has(userId)) {
-        room.watchers.delete(userId);
-      }
-    }
-
-    // 実際にVC内にいない待機者を掃除
-    for (const userId of [...room.waitingUsers.keys()]) {
-      if (!foundVc.members.has(userId)) {
-        room.waitingUsers.delete(userId);
-      }
-    }
-
-    // 待機番号を詰め直す
-    let index = 1;
-    const repaired = new Map();
-    for (const userId of room.waitingUsers.keys()) {
-      repaired.set(userId, index++);
-    }
-    room.waitingUsers = repaired;
-
-    // owner不在なら通常参加者へ移譲
-    if (!foundVc.members.has(room.ownerId)) {
-      const nextOwner = foundVc.members
-        .filter(m => !room.watchers.has(m.id) && !room.waitingUsers.has(m.id))
-        .first();
-
-      if (nextOwner) {
-        room.ownerId = nextOwner.id;
-      }
-    }
-  }
-
-  saveRooms();
-}
-
-async function restoreNicknames() {
-  for (const [vcId, room] of rooms.entries()) {
-    for (const guild of client.guilds.cache.values()) {
-      const vc = guild.channels.cache.get(vcId);
-      if (!vc) continue;
-
-      for (const userId of room.watchers || []) {
-        const member = await guild.members.fetch(userId).catch(() => null);
-        if (member) await normalizeNickname(member, room);
-      }
-
-      for (const userId of room.waitingUsers?.keys?.() || []) {
-        const member = await guild.members.fetch(userId).catch(() => null);
-        if (member) await normalizeNickname(member, room);
-      }
-    }
-  }
-}
-
+// ===== 起動 =====
 client.once("clientReady", async () => {
   loadRooms();
-  await selfHealRooms();
-  await restoreNicknames();
   console.log(`ログイン成功: ${client.user.tag}`);
 });
 
