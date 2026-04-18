@@ -113,6 +113,25 @@ client.once(Events.ClientReady, async () => {
   await register();
 });
 
+// ===== 名前取得（ここが今回の核心）=====
+async function getDisplayName(i) {
+  try {
+    if (i.inGuild()) {
+      const member = await i.guild.members.fetch(i.user.id);
+      return (
+        member.nickname ||
+        member.displayName ||
+        i.user.globalName ||
+        i.user.username
+      );
+    } else {
+      return i.user.globalName || i.user.username;
+    }
+  } catch {
+    return i.user.username;
+  }
+}
+
 // ===== メイン処理 =====
 client.on(Events.InteractionCreate, async i => {
   try {
@@ -126,14 +145,9 @@ client.on(Events.InteractionCreate, async i => {
 
     if (!i.isButton()) return;
 
-    let name;
+    const name = await getDisplayName(i);
+    console.log("DEBUG name:", name); // ← 問題あればここで確認
 
-　　if (i.inGuild()) {
-　　  const member = await i.guild.members.fetch(i.user.id);
-　　  name = member.displayName;
-　　} else {
-　　  name = i.user.username;
-　　}
     // ===== 初回 =====
     if (i.customId === "start") {
       await i.deferUpdate();
