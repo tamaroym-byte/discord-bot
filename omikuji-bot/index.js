@@ -15,13 +15,9 @@ const {
 
 const { getDailyFortune } = require("./fortunes");
 
-// ===== ログ関数 =====
-function log(...args) {
-  console.log("[LOG]", ...args);
-}
-function error(...args) {
-  console.error("[ERROR]", ...args);
-}
+// ===== ログ =====
+const log = (...a) => console.log("[LOG]", ...a);
+const error = (...a) => console.error("[ERROR]", ...a);
 
 // ===== クライアント =====
 const client = new Client({
@@ -31,76 +27,79 @@ const client = new Client({
 // ===== コマンド =====
 const command = new SlashCommandBuilder()
   .setName("kuji")
-  .setDescription("おみくじ（デバッグ版）");
+  .setDescription("おみくじ（1日1回＋引き直し1回）");
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
-// ===== 保存 =====
-const REDRAW_FILE = "./redraws.json";
-if (!fs.existsSync(REDRAW_FILE)) fs.writeFileSync(REDRAW_FILE, "{}");
+// ===== 引き直し管理 =====
+const FILE = "./redraws.json";
+if (!fs.existsSync(FILE)) fs.writeFileSync(FILE, "{}");
 
-function loadRedraws() {
+function load() {
   try {
-    const data = JSON.parse(fs.readFileSync(REDRAW_FILE, "utf8"));
-    log("redraws loaded", data);
-    return data;
-  } catch (e) {
-    error("redraw load failed", e);
+    return JSON.parse(fs.readFileSync(FILE, "utf8"));
+  } catch {
     return {};
   }
 }
 
-function saveRedraws(data) {
-  try {
-    fs.writeFileSync(REDRAW_FILE, JSON.stringify(data, null, 2));
-    log("redraws saved");
-  } catch (e) {
-    error("redraw save failed", e);
-  }
+function save(data) {
+  fs.writeFileSync(FILE, JSON.stringify(data, null, 2));
 }
 
-function getTodayKey(userId) {
-  const today = new Date().toISOString().slice(0, 10);
-  return `${userId}_${today}`;
+function key(userId) {
+  const d = new Date().toISOString().slice(0, 10);
+  return `${userId}_${d}`;
 }
 
 // ===== UI =====
-function buildStartButton() {
-  return new ActionRowBuilder().addComponents(
+const startBtn = () =>
+  new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("kuji_start")
+      .setCustomId("start")
       .setLabel("🎍 おみくじを引く")
       .setStyle(ButtonStyle.Success)
   );
-}
 
-function buildRedrawButton(disabled = false) {
-  return new ActionRowBuilder().addComponents(
+const redrawBtn = (disabled = false) =>
+  new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("kuji_redraw")
+      .setCustomId("redraw")
       .setLabel("🔁 引き直す")
       .setStyle(ButtonStyle.Primary)
       .setDisabled(disabled)
   );
-}
 
 // ===== Embed =====
-function buildEmbed(name, result) {
-  log("buildEmbed", result);
+function color(luck) {
+  return {
+    "大吉": 0xffd700,
+    "吉": 0x00cc66,
+    "中吉": 0x3399ff,
+    "小吉": 0x66ccff,
+    "末吉": 0xaaaaaa,
+    "凶": 0xff6600,
+    "大凶": 0xff0000
+  }[luck] || 0xffffff;
+}
 
+function embed(name, r) {
   return new EmbedBuilder()
-    .setTitle("🎍 おみくじ 🎍")
+    .setColor(color(r.luck))
+    .setTitle(`🎍 ${r.luck} 🎍`)
     .setDescription(`「${name}」さんの運勢`)
     .addFields(
-      { name: "運勢", value: result.luck },
-      { name: "総合", value: result.luckMessage }
+      { name: "総合", value: r.luckMessage },
+      { name: "願望", value: r.wish, inline: true },
+      { name: "待ち人", value: r.person, inline: true },
+      { name: "失せ物", value: r.lost, inline: true },
+      { name: "旅行", value: r.travel, inline: true }
     )
     .setTimestamp();
 }
 
 // ===== コマンド登録 =====
-async function registerCommands() {
-  log("registering command...");
+async function register() {
   await rest.put(
     Routes.applicationCommands(process.env.CLIENT_ID),
     { body: [command.toJSON()] }
@@ -110,109 +109,82 @@ async function registerCommands() {
 
 // ===== 起動 =====
 client.once(Events.ClientReady, async () => {
-  log(`READY: ${client.user.tag}`);
-  await registerCommands();
+  log("READY", client.user.tag);
+  await register();
 });
 
-// ===== Interaction =====
-client.on(Events.InteractionCreate, async interaction => {
-  log("interaction received", interaction.type);
-
+// ===== メイン処理 =====
+client.on(Events.InteractionCreate, async i => {
   try {
-    // ===== Slash =====
-    if (interaction.isChatInputCommand()) {
-      log("slash command", interaction.commandName);
-
-      if (interaction.commandName === "kuji") {
-        await interaction.reply({
-          content: "ボタンを押してください",
-          components: [buildStartButton()]
-        });
-        log("slash reply sent");
-      }
+    // Slash
+    if (i.isChatInputCommand() && i.commandName === "kuji") {
+      return i.reply({
+        content: "🎍 ボタンを押しておみくじを引く",
+        components: [startBtn()]
+      });
     }
 
-    // ===== ボタン =====
-    if (!interaction.isButton()) return;
+    if (!i.isButton()) return;
 
-    log("button pressed", interaction.customId);
+    const name = i.member?.displayName || i.user.username;
 
-    const member = await interaction.guild.members.fetch(interaction.user.id);
-    const name = member.displayName;
+    // ===== 初回 =====
+    if (i.customId === "start") {
+      await i.deferUpdate();
 
-    // --- START ---
-    if (interaction.customId === "kuji_start") {
-      log("start clicked");
+      const r = getDailyFortune(i.user.id);
 
-      await interaction.deferUpdate(); // 安定化
-
-      const result = getDailyFortune(interaction.user.id);
-
-      await interaction.editReply({
-        content: "結果",
-        embeds: [buildEmbed(name, result)],
-        components: [buildRedrawButton(false)]
+      await i.editReply({
+        content: "🎍 結果",
+        embeds: [embed(name, r)],
+        components: [redrawBtn(false)]
       });
 
-      log("start done");
+      log("start OK");
     }
 
-    // --- REDRAW ---
-    if (interaction.customId === "kuji_redraw") {
-      log("redraw clicked");
+    // ===== 引き直し =====
+    if (i.customId === "redraw") {
+      await i.deferUpdate();
 
-      await interaction.deferUpdate();
+      const data = load();
+      const k = key(i.user.id);
 
-      const redraws = loadRedraws();
-      const key = getTodayKey(interaction.user.id);
-
-      if (redraws[key]) {
-        log("already used redraw");
-
-        return interaction.followUp({
-          content: "もう引き直せません",
-          ephemeral: true
+      if (data[k]) {
+        return i.followUp({
+          content: "⛔ 今日は引き直し済み",
+          flags: 64
         });
       }
 
-      const result = getDailyFortune(interaction.user.id, true);
+      const r = getDailyFortune(i.user.id, true);
 
-      redraws[key] = true;
-      saveRedraws(redraws);
+      data[k] = true;
+      save(data);
 
-      await interaction.editReply({
-        content: "引き直しました",
-        embeds: [buildEmbed(name, result)],
-        components: [buildRedrawButton(true)]
+      await i.editReply({
+        content: "🔁 引き直し結果",
+        embeds: [embed(name, r)],
+        components: [redrawBtn(true)]
       });
 
-      log("redraw done");
+      log("redraw OK");
     }
 
-  } catch (err) {
-    error("interaction error", err);
+  } catch (e) {
+    error("interaction error", e);
 
-    try {
-      if (!interaction.replied) {
-        await interaction.reply({
-          content: "エラー発生（ログ確認）",
-          ephemeral: true
-        });
-      }
-    } catch (e) {
-      error("reply fail", e);
+    if (!i.replied) {
+      try {
+        await i.reply({ content: "エラー発生", flags: 64 });
+      } catch {}
     }
   }
 });
 
 // ===== クラッシュ防止 =====
-process.on("unhandledRejection", err => {
-  error("UNHANDLED REJECTION", err);
-});
-
-process.on("uncaughtException", err => {
-  error("UNCAUGHT EXCEPTION", err);
-});
+process.on("unhandledRejection", e => error("UNHANDLED", e));
+process.on("uncaughtException", e => error("UNCAUGHT", e));
 
 // ===== 起動 =====
 client.login(process.env.DISCORD_TOKEN);
