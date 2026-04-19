@@ -115,33 +115,27 @@ function buttons() {
 // 募集チャンネル
 // =====================
 function getRecruitChannel(guild, vc) {
-  const category = guild.channels.cache.find(
-    c =>
-      c.name === config.recruitCategoryName &&
-      c.type === ChannelType.GuildCategory
-  );
+  const category = guild.channels.cache.get(config.recruitCategoryId);
   if (!category) return null;
 
-  const vcCat = vc.parent?.name;
-
   const target =
-    config.recruitChannels[vcCat] ??
-    config.defaultRecruitChannel;
+    config.recruitChannels[vc.parentId] ??
+    config.recruitChannels.default ??
+    "他ゲーム募集";
 
   return guild.channels.cache.find(
     c => c.parentId === category.id && c.name === target
   );
 }
-
 // =====================
 // 最大人数（固定 or 選択）
 // =====================
 function getFixedMax(vc) {
-  return config.vcRules.categories?.[vc.parent?.name]?.fixedMax ?? null;
+  return config.vcRules.categories?.[vc.parentId]?.fixedMax ?? null;
 }
 
 function getSelectableMax(vc) {
-  return config.vcRules.categories?.[vc.parent?.name]?.selectableMax ?? null;
+  return config.vcRules.categories?.[vc.parentId]?.selectableMax ?? null;
 }
 
 // =====================
