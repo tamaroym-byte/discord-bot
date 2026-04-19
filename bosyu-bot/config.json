@@ -1,20 +1,19 @@
 {
-  "recruitCategoryName": "募集",
+  "recruitCategoryId": "1485966701538447391",
 
   "recruitChannels": {
-    "PHASMOPHOBIA": "調査員募集"
+    "1485967121069379684": "調査員募集",
+    "1485967408773464164": "他ゲーム募集"
   },
-
-  "defaultRecruitChannel": "他ゲーム募集",
 
   "vcRules": {
     "defaultMax": 4,
 
     "categories": {
-      "PHASMOPHOBIA": {
-        "max": 3
+      "1485959873110737019": {
+        "fixedMax": 3
       },
-      "他ゲーム": {
+      "1485967860604862464": {
         "selectableMax": [3, 7, 11]
       }
     }
