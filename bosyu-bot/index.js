@@ -22,6 +22,12 @@ const client = new Client({
   ]
 });
 
+const BOT_ROLE_ID = "1486765755436634185";
+
+function isBotMember(member) {
+  return member.roles.cache.has(BOT_ROLE_ID);
+}
+
 const rooms = new Map();
 const creatingRooms = new Set();
 
@@ -63,6 +69,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 });
 
 async function handleJoin(state) {
+  if (isBotMember(state.member)) return;
   const vc = state.channel;
   const member = state.member;
   if (!/^部屋[1-4]$/.test(vc.name)) return;
@@ -107,6 +114,7 @@ async function handleJoin(state) {
 }
 
 async function handleLeave(state) {
+  if (isBotMember(state.member)) return;
   const vc = state.channel;
   const member = state.member;
   const room = rooms.get(vc.id);
@@ -262,6 +270,7 @@ async function reorderWaiting(vc, room) {
 }
 
 async function normalizeNickname(member, room) {
+  if (isBotMember(state.member)) return;
   if (!member.manageable) return;
 
   let name = member.displayName
