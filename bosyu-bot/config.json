@@ -1,0 +1,22 @@
+{
+  "recruitCategoryName": "募集",
+
+  "recruitChannels": {
+    "PHASMOPHOBIA": "調査員募集"
+  },
+
+  "defaultRecruitChannel": "他ゲーム募集",
+
+  "vcRules": {
+    "defaultMax": 4,
+
+    "categories": {
+      "PHASMOPHOBIA": {
+        "max": 3
+      },
+      "他ゲーム": {
+        "max": 7
+      }
+    }
+  }
+}
