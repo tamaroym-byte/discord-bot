@@ -25,7 +25,7 @@ const rooms = new Map();
 const creatingRooms = new Set();
 
 // ===== BOT判定 =====
-const BOT_ROLE_ID = "YOUR_BOT_ROLE_ID";
+const BOT_ROLE_ID = "1486765755436634185";
 
 function isBotMember(member) {
   if (!member) return true;
