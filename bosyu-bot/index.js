@@ -7,6 +7,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  StringSelectMenuBuilder,
   ChannelType,
 } = require("discord.js");
 
@@ -14,6 +15,7 @@ const {
 // CONFIG
 // =====================
 const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
+
 const SAVE_FILE = "/data/rooms.json";
 if (!fs.existsSync(SAVE_FILE)) fs.writeFileSync(SAVE_FILE, "[]");
 
@@ -57,9 +59,9 @@ async function withLock(key, fn) {
 // =====================
 // BOT判定
 // =====================
-function isBot(member) {
-  if (!member) return true;
-  return member.user.bot || member.roles.cache.has(BOT_ROLE_ID);
+function isBot(m) {
+  if (!m) return true;
+  return m.user.bot || m.roles.cache.has(BOT_ROLE_ID);
 }
 
 // =====================
@@ -98,25 +100,19 @@ function loadRooms() {
 // =====================
 function buttons() {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("join").setLabel("参加").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("watch").setLabel("観戦").setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder()
+      .setCustomId("join")
+      .setLabel("参加")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId("watch")
+      .setLabel("観戦")
+      .setStyle(ButtonStyle.Secondary)
   );
 }
 
 // =====================
-// 募集テキスト
-// =====================
-function getText(vc, room) {
-  const tag = room.full ? "＠〆" : "@1";
-
-  return `${tag}
-🎮 ${vc.name}
-参加: ${room.players.size}/${room.max}
-待機: ${room.queue.length}`;
-}
-
-// =====================
-// 募集チャンネル取得（完全設定化）
+// 募集チャンネル
 // =====================
 function getRecruitChannel(guild, vc) {
   const category = guild.channels.cache.find(
@@ -126,10 +122,10 @@ function getRecruitChannel(guild, vc) {
   );
   if (!category) return null;
 
-  const vcCategory = vc.parent?.name;
+  const vcCat = vc.parent?.name;
 
   const target =
-    config.recruitChannels[vcCategory] ??
+    config.recruitChannels[vcCat] ??
     config.defaultRecruitChannel;
 
   return guild.channels.cache.find(
@@ -138,36 +134,47 @@ function getRecruitChannel(guild, vc) {
 }
 
 // =====================
-// 最大人数（完全設定化）
+// 最大人数（固定 or 選択）
 // =====================
-function getMax(vc) {
-  const cat = vc.parent?.name;
+function getFixedMax(vc) {
+  return config.vcRules.categories?.[vc.parent?.name]?.fixedMax ?? null;
+}
 
-  return (
-    config.vcRules.categories?.[cat]?.max ??
-    config.vcRules.defaultMax
-  );
+function getSelectableMax(vc) {
+  return config.vcRules.categories?.[vc.parent?.name]?.selectableMax ?? null;
 }
 
 // =====================
-// メッセージ同期
+// メッセージ
+// =====================
+function text(vc, room) {
+  const tag = room.full ? "＠〆" : "@1";
+
+  return `${tag}
+🎮 ${vc.name}
+参加: ${room.players.size}/${room.max}
+待機: ${room.queue.length}`;
+}
+
+// =====================
+// sync
 // =====================
 async function sync(vc, room) {
-  const channel = getRecruitChannel(vc.guild, vc);
-  if (!channel) return;
+  const ch = getRecruitChannel(vc.guild, vc);
+  if (!ch) return;
 
   let msg;
 
   try {
-    msg = await channel.messages.fetch(room.messageId);
+    msg = await ch.messages.fetch(room.messageId);
   } catch {
     msg = null;
   }
 
-  const content = getText(vc, room);
+  const content = text(vc, room);
 
   if (!msg || msg.author.id !== client.user.id) {
-    const m = await channel.send(content);
+    const m = await ch.send(content);
     room.messageId = m.id;
     return;
   }
@@ -178,29 +185,63 @@ async function sync(vc, room) {
 }
 
 // =====================
-// 昇格
+// 3/7/11 UI
 // =====================
-function promote(room) {
-  if (room.players.size >= room.max) return null;
-  if (room.queue.length === 0) return null;
+async function showMaxSelect(vc, member, options) {
+  const ch = getRecruitChannel(vc.guild, vc);
+  if (!ch) return;
 
-  const next = room.queue.shift();
-  room.players.add(next);
+  const msg = await ch.send({
+    content: `${member} 募集人数を選択してください`,
+    components: [
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`max_${vc.id}`)
+          .addOptions(
+            options.map(v => ({
+              label: `${v}人`,
+              value: String(v),
+            }))
+          )
+      ),
+    ],
+  });
 
-  return next;
+  const collector = msg.createMessageComponentCollector({
+    max: 1,
+    time: 30000,
+    filter: i => i.user.id === member.id,
+  });
+
+  collector.on("collect", async i => {
+    const room = createRoom(vc, member);
+
+    room.max = parseInt(i.values[0]);
+    room.players.add(member.id);
+
+    await i.update({ content: "参加しました", components: [] });
+
+    saveRooms();
+    await sync(vc, room);
+  });
 }
 
 // =====================
-// OWNER
+// room作成
 // =====================
-function transferOwner(vc, room) {
-  if (room.players.has(room.ownerId)) return;
+function createRoom(vc, member) {
+  const room = {
+    ownerId: member.id,
+    max: 4,
+    players: new Set(),
+    watchers: new Set(),
+    queue: [],
+    full: false,
+    messageId: null,
+  };
 
-  const next = vc.members
-    .filter(m => room.players.has(m.id) && !isBot(m))
-    .first();
-
-  if (next) room.ownerId = next.id;
+  rooms.set(vc.id, room);
+  return room;
 }
 
 // =====================
@@ -213,22 +254,24 @@ async function join(state) {
   if (!/^部屋/.test(vc.name)) return;
 
   await withLock(vc.id, async () => {
-    if (!rooms.has(vc.id)) {
-      const msg = await getRecruitChannel(vc.guild, vc)?.send("初期化中...");
+    let room = rooms.get(vc.id);
 
-      rooms.set(vc.id, {
-        ownerId: member.id,
-        max: getMax(vc),
-        players: new Set(),
-        watchers: new Set(),
-        queue: [],
-        messageId: msg?.id,
-        full: false,
-      });
+    if (!room) {
+      const fixed = getFixedMax(vc);
+      const selectable = getSelectableMax(vc);
+
+      room = createRoom(vc, member);
+
+      if (fixed) {
+        room.max = fixed;
+        room.players.add(member.id);
+      } else if (selectable) {
+        await showMaxSelect(vc, member, selectable);
+        return;
+      }
     }
 
-    const room = rooms.get(vc.id);
-    if (!room || room.watchers.has(member.id)) return;
+    if (room.watchers.has(member.id)) return;
 
     if (room.players.size < room.max) {
       room.players.add(member.id);
@@ -258,14 +301,9 @@ async function leave(state) {
     room.watchers.delete(member.id);
     room.queue = room.queue.filter(id => id !== member.id);
 
-    transferOwner(vc, room);
-
-    const promoted = promote(room);
-    if (promoted) {
-      const m = await vc.guild.members.fetch(promoted).catch(() => null);
-      if (m) {
-        await normalizeNickname(m, room);
-      }
+    if (room.players.size < room.max && room.queue.length > 0) {
+      const next = room.queue.shift();
+      room.players.add(next);
     }
 
     room.full = room.players.size >= room.max;
@@ -292,27 +330,6 @@ client.on("voiceStateUpdate", async (oldS, newS) => {
   if (!oldS.channel && newS.channel) return join(newS);
   if (oldS.channel && !newS.channel) return leave(oldS);
 });
-
-// =====================
-// ニックネーム
-// =====================
-async function normalizeNickname(member, room) {
-  if (isBot(member)) return;
-  if (!member.manageable) return;
-
-  let name = member.displayName
-    .replace(/（観戦）/g, "")
-    .replace(/ 待機\d+/g, "");
-
-  if (room.watchers.has(member.id)) {
-    name += "（観戦）";
-  } else {
-    const i = room.queue.indexOf(member.id);
-    if (i !== -1) name += ` 待機${i + 1}`;
-  }
-
-  await member.setNickname(name).catch(() => {});
-}
 
 // =====================
 // 起動復元
