@@ -212,13 +212,13 @@ async function showSelection(vc, member, room) {
   if (!channel) return;
 
   const msg = await channel.send({
-    content: `${member} 参加 or 観戦？（60秒）`,
+    content: `${member} 参加 or 観戦？（30秒）`,
     components: [buildButtons()]
   });
 
   const collector = msg.createMessageComponentCollector({
     filter: i => i.user.id === member.id,
-    time: 60000,
+    time: 30000,
     max: 1
   });
 
