@@ -1,0 +1,21 @@
+{
+  "name": "recruit-bot",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "ts-node-dev src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14",
+    "dotenv": "^16",
+    "@prisma/client": "^5",
+    "pino": "^8"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "ts-node-dev": "^2",
+    "@types/node": "^20",
+    "prisma": "^5"
+  }
+}
